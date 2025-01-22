@@ -424,24 +424,15 @@ func handleStreamingResponse(w http.ResponseWriter, resp *http.Response) {
                 }
 
                 // Log the line for debugging
-                lineStr := string(bytes.TrimSpace(line))
-                log.Printf("Streaming line: %s", lineStr)
+                lineStr := string(line)
+                log.Printf("Stream line: %s", lineStr)
 
-                // Handle keep-alive messages
-                if lineStr == ": keep-alive" {
-                        if _, err := w.Write([]byte(": keep-alive\n\n")); err != nil {
-                                log.Printf("Error writing keep-alive: %v", err)
-                                return
-                        }
-                        flusher.Flush()
-                        continue
-                }
-
-                // Parse SSE data line
+                // Handle data: prefix
                 if strings.HasPrefix(lineStr, "data: ") {
                         data := strings.TrimPrefix(lineStr, "data: ")
+                        data = strings.TrimSpace(data)
 
-                        // Forward [DONE] message immediately but don't return
+                        // Handle [DONE] message
                         if data == "[DONE]" {
                                 if _, err := w.Write([]byte("data: [DONE]\n\n")); err != nil {
                                         log.Printf("Error writing done message: %v", err)
@@ -452,7 +443,7 @@ func handleStreamingResponse(w http.ResponseWriter, resp *http.Response) {
                         }
 
                         // Write the line immediately to maintain streaming
-                        if _, err := w.Write([]byte(lineStr + "\n\n")); err != nil {
+                        if _, err := w.Write([]byte(lineStr + "\n")); err != nil {
                                 log.Printf("Error writing stream: %v", err)
                                 return
                         }
@@ -479,7 +470,14 @@ func handleStreamingResponse(w http.ResponseWriter, resp *http.Response) {
 
                                         // Log tool call completion but don't stop streaming
                                         if choice.FinishReason == "tool_calls" {
-                                                log.Printf("Tool call finished, continuing...")
+                                                log.Printf("Tool call finished, continuing stream...")
+                                                // Write an additional newline to ensure proper SSE formatting
+                                                if _, err := w.Write([]byte("\n")); err != nil {
+                                                        log.Printf("Error writing newline: %v", err)
+                                                        return
+                                                }
+                                                flusher.Flush()
+                                                continue
                                         }
 
                                         // Log content
@@ -491,7 +489,7 @@ func handleStreamingResponse(w http.ResponseWriter, resp *http.Response) {
                         continue
                 }
 
-                // Write any other line with proper SSE formatting
+                // Write any other line with proper SSE format
                 if _, err := w.Write([]byte(lineStr + "\n\n")); err != nil {
                         log.Printf("Error writing stream: %v", err)
                         return
