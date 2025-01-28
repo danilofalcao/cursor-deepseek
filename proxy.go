@@ -3,8 +3,6 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"compress/flate"
-	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,9 +11,9 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/andybalholm/brotli"
 	"github.com/joho/godotenv"
 	"golang.org/x/net/http2"
 )
@@ -37,6 +35,56 @@ type Config struct {
 }
 
 var activeConfig Config
+
+// Global HTTP client with optimized settings
+var httpClient = &http.Client{
+	Transport: &http2.Transport{
+		AllowHTTP: true,
+		DialTLS:   nil,
+		// Optimize connection pooling
+		ReadIdleTimeout:  30 * time.Second,
+		PingTimeout:      10 * time.Second,
+		WriteByteTimeout: 15 * time.Second,
+	},
+	Timeout: 5 * time.Minute,
+}
+
+var (
+	// Buffer pools for various sizes
+	smallBufferPool = sync.Pool{
+		New: func() interface{} {
+			return new(bytes.Buffer)
+		},
+	}
+
+	largeBufferPool = sync.Pool{
+		New: func() interface{} {
+			return new(bytes.Buffer)
+		},
+	}
+
+	// Debug mode flag
+	debugMode = os.Getenv("DEBUG") == "true"
+)
+
+func getBuffer(size int) *bytes.Buffer {
+	var buf *bytes.Buffer
+	if size < 1024 {
+		buf = smallBufferPool.Get().(*bytes.Buffer)
+	} else {
+		buf = largeBufferPool.Get().(*bytes.Buffer)
+	}
+	buf.Reset()
+	return buf
+}
+
+func putBuffer(buf *bytes.Buffer) {
+	if buf.Cap() < 1024 {
+		smallBufferPool.Put(buf)
+	} else {
+		largeBufferPool.Put(buf)
+	}
+}
 
 func init() {
 	// Load .env file
@@ -216,6 +264,12 @@ type DeepSeekRequest struct {
 	ToolChoice  string    `json:"tool_choice,omitempty"`
 }
 
+func debugLog(format string, args ...interface{}) {
+	if debugMode {
+		log.Printf(format, args...)
+	}
+}
+
 func main() {
 	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
 
@@ -242,7 +296,7 @@ func enableCors(w http.ResponseWriter) {
 }
 
 func proxyHandler(w http.ResponseWriter, r *http.Request) {
-	log.Printf("Received request: %s %s", r.Method, r.URL.Path)
+	debugLog("Received request: %s %s", r.Method, r.URL.Path)
 
 	if r.Method == "OPTIONS" {
 		enableCors(w)
@@ -254,7 +308,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	// Validate API key
 	authHeader := r.Header.Get("Authorization")
 	if !strings.HasPrefix(authHeader, "Bearer ") {
-		log.Printf("Missing or invalid Authorization header")
+		debugLog("Missing or invalid Authorization header")
 		http.Error(w, "Missing or invalid Authorization header", http.StatusUnauthorized)
 		return
 	}
@@ -274,13 +328,13 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Log headers for debugging
-	log.Printf("Request headers: %+v", r.Header)
+	debugLog("Request headers: %+v", r.Header)
 
 	// Read and log request body for debugging
 	var chatReq ChatRequest
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		log.Printf("Error reading request body: %v", err)
+		debugLog("Error reading request body: %v", err)
 		http.Error(w, "Error reading request", http.StatusBadRequest)
 		return
 	}
@@ -324,7 +378,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Replace gpt-4o model with the appropriate deepseek model
 	if chatReq.Model == gpt4oModel {
-		log.Printf("Converting gpt-4o to configured model: %s", activeConfig.model)
+		log.Printf("Converting gpt-4o to configured model: %s (endpoint: %s)", activeConfig.model, activeConfig.endpoint)
 		chatReq.Model = activeConfig.model
 		log.Printf("Model converted to: %s", activeConfig.model)
 	} else {
@@ -340,7 +394,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 		Stream:   chatReq.Stream,
 	}
 
-	log.Printf("Creating DeepSeek request with model: %s", deepseekReq.Model)
+	log.Printf("Creating DeepSeek request with model: %s at endpoint: %s", deepseekReq.Model, activeConfig.endpoint)
 
 	// Copy optional parameters if present
 	if chatReq.Temperature != nil {
@@ -389,6 +443,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 		targetURL += "?" + r.URL.RawQuery
 	}
 
+	log.Printf("Using endpoint %s with model %s", activeConfig.endpoint, activeConfig.model)
 	log.Printf("Forwarding to: %s", targetURL)
 	proxyReq, err := http.NewRequest(r.Method, targetURL, bytes.NewReader(modifiedBody))
 	if err != nil {
@@ -414,17 +469,8 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Proxy request headers: %v", proxyReq.Header)
 
-	// Create a custom client with keepalive
-	client := &http.Client{
-		Transport: &http2.Transport{
-			AllowHTTP: true,
-			DialTLS:   nil,
-		},
-		Timeout: 5 * time.Minute,
-	}
-
-	// Send the request
-	resp, err := client.Do(proxyReq)
+	// Use the global client instead of creating a new one
+	resp, err := httpClient.Do(proxyReq)
 	if err != nil {
 		log.Printf("Error forwarding request: %v", err)
 		http.Error(w, "Error forwarding request", http.StatusBadGateway)
@@ -466,9 +512,9 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleStreamingResponse(w http.ResponseWriter, r *http.Request, resp *http.Response) {
-	log.Printf("Starting streaming response handling")
-	log.Printf("Response status: %d", resp.StatusCode)
-	log.Printf("Response headers: %+v", resp.Header)
+	debugLog("Starting streaming response handling")
+	debugLog("Response status: %d", resp.StatusCode)
+	debugLog("Response headers: %+v", resp.Header)
 
 	// Set headers for streaming response
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -544,19 +590,19 @@ func handleStreamingResponse(w http.ResponseWriter, r *http.Request, resp *http.
 }
 
 func handleRegularResponse(w http.ResponseWriter, resp *http.Response) {
-	log.Printf("Handling regular (non-streaming) response")
-	log.Printf("Response status: %d", resp.StatusCode)
-	log.Printf("Response headers: %+v", resp.Header)
+	debugLog("Handling regular (non-streaming) response")
+	debugLog("Response status: %d", resp.StatusCode)
+	debugLog("Response headers: %+v", resp.Header)
 
 	// Read and log response body
 	body, err := readResponse(resp)
 	if err != nil {
-		log.Printf("Error reading response: %v", err)
+		debugLog("Error reading response: %v", err)
 		http.Error(w, "Error reading response from upstream", http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("Original response body: %s", string(body))
+	debugLog("Original response body: %s", string(body))
 
 	// Parse the DeepSeek response
 	var deepseekResp struct {
@@ -577,7 +623,7 @@ func handleRegularResponse(w http.ResponseWriter, resp *http.Response) {
 	}
 
 	if err := json.Unmarshal(body, &deepseekResp); err != nil {
-		log.Printf("Error parsing DeepSeek response: %v", err)
+		debugLog("Error parsing DeepSeek response: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -602,11 +648,10 @@ func handleRegularResponse(w http.ResponseWriter, resp *http.Response) {
 		ID:      deepseekResp.ID,
 		Object:  "chat.completion",
 		Created: deepseekResp.Created,
-		Model:   gpt4oModel, // Always return gpt-4o as the model
+		Model:   gpt4oModel,
 		Usage:   deepseekResp.Usage,
 	}
 
-	// Convert choices and ensure tool calls are properly handled
 	openAIResp.Choices = make([]struct {
 		Index        int     `json:"index"`
 		Message      Message `json:"message"`
@@ -624,41 +669,35 @@ func handleRegularResponse(w http.ResponseWriter, resp *http.Response) {
 			FinishReason: choice.FinishReason,
 		}
 
-		// Ensure tool calls are properly formatted in the message
 		if len(choice.Message.ToolCalls) > 0 {
-			log.Printf("Processing %d tool calls in choice %d", len(choice.Message.ToolCalls), i)
+			debugLog("Processing %d tool calls in choice %d", len(choice.Message.ToolCalls), i)
 			for j, tc := range choice.Message.ToolCalls {
-				log.Printf("Tool call %d: %+v", j, tc)
-				// Ensure the tool call has the required fields
+				debugLog("Tool call %d: %+v", j, tc)
 				if tc.Function.Name == "" {
-					log.Printf("Warning: Empty function name in tool call %d", j)
+					debugLog("Warning: Empty function name in tool call %d", j)
 					continue
 				}
-				// Keep the tool call as is since it's already in the correct format
 				openAIResp.Choices[i].Message.ToolCalls = append(openAIResp.Choices[i].Message.ToolCalls, tc)
 			}
 		}
 	}
 
-	// Convert back to JSON
 	modifiedBody, err := json.Marshal(openAIResp)
 	if err != nil {
-		log.Printf("Error creating modified response: %v", err)
+		debugLog("Error creating modified response: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("Modified response body: %s", string(modifiedBody))
+	debugLog("Modified response body: %s", string(modifiedBody))
 
-	// Set response headers
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
 	w.Write(modifiedBody)
-	log.Printf("Modified response sent successfully")
+	debugLog("Modified response sent successfully")
 }
 
 func copyHeaders(dst, src http.Header) {
-	// Headers to skip
 	skipHeaders := map[string]bool{
 		"Content-Length":    true,
 		"Content-Encoding":  true,
@@ -676,7 +715,7 @@ func copyHeaders(dst, src http.Header) {
 }
 
 func handleModelsRequest(w http.ResponseWriter) {
-	log.Printf("Handling models request")
+	debugLog("Handling models request")
 	response := ModelsResponse{
 		Object: "list",
 		Data: []Model{
@@ -697,25 +736,7 @@ func handleModelsRequest(w http.ResponseWriter) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
-	log.Printf("Models response sent successfully")
+	debugLog("Models response sent successfully")
 }
 
-func readResponse(resp *http.Response) ([]byte, error) {
-	var reader io.Reader = resp.Body
-
-	switch resp.Header.Get("Content-Encoding") {
-	case "gzip":
-		gzReader, err := gzip.NewReader(resp.Body)
-		if err != nil {
-			return nil, fmt.Errorf("error creating gzip reader: %v", err)
-		}
-		defer gzReader.Close()
-		reader = gzReader
-	case "br":
-		reader = brotli.NewReader(resp.Body)
-	case "deflate":
-		reader = flate.NewReader(resp.Body)
-	}
-
-	return io.ReadAll(reader)
-}
+// ... existing code ...
