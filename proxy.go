@@ -324,6 +324,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Replace gpt-4o model with the appropriate deepseek model
 	if chatReq.Model == gpt4oModel {
+		log.Printf("Converting gpt-4o to configured model: %s", activeConfig.model)
 		chatReq.Model = activeConfig.model
 		log.Printf("Model converted to: %s", activeConfig.model)
 	} else {
@@ -334,10 +335,12 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Convert to DeepSeek request format
 	deepseekReq := DeepSeekRequest{
-		Model:    activeConfig.model,
+		Model:    activeConfig.model, // Ensure we use the configured model
 		Messages: convertMessages(chatReq.Messages),
 		Stream:   chatReq.Stream,
 	}
+
+	log.Printf("Creating DeepSeek request with model: %s", deepseekReq.Model)
 
 	// Copy optional parameters if present
 	if chatReq.Temperature != nil {
