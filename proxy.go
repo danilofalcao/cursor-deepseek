@@ -739,4 +739,14 @@ func handleModelsRequest(w http.ResponseWriter) {
 	debugLog("Models response sent successfully")
 }
 
-// ... existing code ...
+func readResponse(resp *http.Response) ([]byte, error) {
+	buf := getBuffer(int(resp.ContentLength))
+	defer putBuffer(buf)
+
+	_, err := io.Copy(buf, resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
+}
