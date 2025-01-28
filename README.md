@@ -13,16 +13,16 @@ This proxy was created to enable Cursor IDE users to leverage DeepSeek's and Ope
 - Streaming responses
 - Support for function calling/tools
 - Automatic message format conversion
-- Compression support (Brotli, Gzip, Deflate)
 - Compatible with OpenAI API client libraries
 - API key validation for secure access
-- Docker container support with multi-variant builds
+- Support for both DeepSeek and OpenRouter endpoints
+- Docker container support
 
 ## Prerequisites
 
 - Cursor Pro Subscription
 - Go 1.19 or higher
-- DeepSeek or OpenRouter API key
+- DeepSeek API key and/or OpenRouter API key
 - Public Endpoint
 
 ## Installation
@@ -35,30 +35,21 @@ go mod download
 
 ### Docker Installation
 
-The proxy supports both DeepSeek and OpenRouter variants. Choose the appropriate build command for your needs:
-
 1. Build the Docker image:
-   - For DeepSeek (default):
-   ```bash
-   docker build -t cursor-deepseek .
-   ```
-   - For OpenRouter:
-   ```bash
-   docker build -t cursor-openrouter --build-arg PROXY_VARIANT=openrouter .
-   ```
+```bash
+docker build -t cursor-deepseek .
+```
 
 2. Configure environment variables:
    - Copy the example configuration:
    ```bash
    cp .env.example .env
    ```
-   - Edit `.env` and add your API key (either DeepSeek or OpenRouter)
+   - Edit `.env` and add your API key(s)
 
 3. Run the container:
 ```bash
 docker run -p 9000:9000 --env-file .env cursor-deepseek
-# OR for OpenRouter
-docker run -p 9000:9000 --env-file .env cursor-openrouter
 ```
 
 ## Configuration
@@ -70,48 +61,50 @@ The repository includes an `.env.example` file showing the required environment 
 cp .env.example .env
 ```
 
-2. Edit `.env` and add your API key:
+2. Edit `.env` and add your API key(s):
 ```bash
-# For DeepSeek
+# For DeepSeek (required for chat and coder models)
 DEEPSEEK_API_KEY=your_deepseek_api_key_here
 
-# OR for OpenRouter
+# For OpenRouter (required for openrouter model)
 OPENROUTER_API_KEY=your_openrouter_api_key_here
 ```
 
-Note: Only configure ONE of the API keys based on which variant you're using.
+Note: You can configure either one or both API keys depending on which models you plan to use.
 
 ## Usage
 
-1. Start the proxy server:
+Start the proxy server with one of the following commands:
+
 ```bash
-go run proxy.go
-# OR you can specify a model:
-go run proxy.go -model coder
-# OR
+# For DeepSeek Chat model (default)
 go run proxy.go -model chat
-# OR for OpenRouter
-go run proxy-openrouter.go
+
+# For DeepSeek Coder model
+go run proxy.go -model coder
+
+# For OpenRouter DeepSeek model
+go run proxy.go -model openrouter
 ```
 
 The server will start on port 9000 by default.
 
-2. Use the proxy with your OpenAI API clients by setting the base URL to `http://your-public-endpoint:9000/v1`
+Use the proxy with your OpenAI API clients by setting the base URL to `http://your-public-endpoint:9000/v1`
+
+### Supported Models
+
+- `gpt-4o` maps to:
+  - DeepSeek Chat model (`deepseek-chat`) when using `-model chat`
+  - DeepSeek Coder model (`deepseek-coder`) when using `-model coder`
+  - DeepSeek OpenRouter model (`deepseek/deepseek-chat`) when using `-model openrouter`
 
 ### Supported Endpoints
 
 - `/v1/chat/completions` - Chat completions endpoint
 - `/v1/models` - Models listing endpoint
 
-### Model Mapping
-
-- `gpt-4o` maps to DeepSeek's GPT-4o equivalent model
-- `deepseek-chat` for DeepSeek's native chat model
-- `deepseek/deepseek-chat` for OpenRouter's DeepSeek model
-
 ## Dependencies
 
-- `github.com/andybalholm/brotli` - Brotli compression support
 - `github.com/joho/godotenv` - Environment variable management
 - `golang.org/x/net` - HTTP/2 support
 
