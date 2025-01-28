@@ -19,19 +19,25 @@ import (
 )
 
 const (
-	deepseekEndpoint     = "https://api.deepseek.com"
-	deepseekBetaEndpoint = "https://api.deepseek.com/beta"
-	deepseekChatModel    = "deepseek-chat"
-	deepseekCoderModel   = "deepseek-coder"
-	gpt4oModel           = "gpt-4o"
+	deepseekEndpoint        = "https://api.deepseek.com"
+	deepseekBetaEndpoint    = "https://api.deepseek.com/beta"
+	openRouterEndpoint      = "https://openrouter.ai/api/v1"
+	deepseekOpenRouterModel = "deepseek/deepseek-chat"
+	deepseekChatModel       = "deepseek-chat"
+	deepseekCoderModel      = "deepseek-coder"
+	gpt4oModel              = "gpt-4o"
 )
 
-var deepseekAPIKey string
+var (
+	deepseekAPIKey   string
+	openRouterAPIKey string
+)
 
 // Configuration structure
 type Config struct {
 	endpoint string
 	model    string
+	apiKey   string
 }
 
 var activeConfig Config
@@ -92,10 +98,13 @@ func init() {
 		log.Printf("Warning: .env file not found or error loading it: %v", err)
 	}
 
-	// Get DeepSeek API key
+	// Get API keys
 	deepseekAPIKey = os.Getenv("DEEPSEEK_API_KEY")
-	if deepseekAPIKey == "" {
-		log.Fatal("DEEPSEEK_API_KEY environment variable is required")
+	openRouterAPIKey = os.Getenv("OPENROUTER_API_KEY")
+
+	// Ensure at least one API key is provided
+	if deepseekAPIKey == "" && openRouterAPIKey == "" {
+		log.Fatal("Either DEEPSEEK_API_KEY or OPENROUTER_API_KEY environment variable is required")
 	}
 
 	// Parse command line arguments
@@ -109,20 +118,41 @@ func init() {
 	// Configure the active endpoint and model based on the flag
 	switch modelFlag {
 	case "coder":
+		if deepseekAPIKey == "" {
+			log.Fatal("DEEPSEEK_API_KEY is required for coder model")
+		}
 		activeConfig = Config{
 			endpoint: deepseekBetaEndpoint,
 			model:    deepseekCoderModel,
+			apiKey:   deepseekAPIKey,
 		}
 	case "chat":
+		if deepseekAPIKey == "" {
+			log.Fatal("DEEPSEEK_API_KEY is required for chat model")
+		}
 		activeConfig = Config{
 			endpoint: deepseekEndpoint,
 			model:    deepseekChatModel,
+			apiKey:   deepseekAPIKey,
+		}
+	case "openrouter":
+		if openRouterAPIKey == "" {
+			log.Fatal("OPENROUTER_API_KEY is required for openrouter model")
+		}
+		activeConfig = Config{
+			endpoint: openRouterEndpoint,
+			model:    deepseekOpenRouterModel,
+			apiKey:   openRouterAPIKey,
 		}
 	default:
 		log.Printf("Invalid model specified: %s. Using default chat model.", modelFlag)
+		if deepseekAPIKey == "" {
+			log.Fatal("DEEPSEEK_API_KEY is required for default chat model")
+		}
 		activeConfig = Config{
 			endpoint: deepseekEndpoint,
 			model:    deepseekChatModel,
+			apiKey:   deepseekAPIKey,
 		}
 	}
 
@@ -314,7 +344,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userAPIKey := strings.TrimPrefix(authHeader, "Bearer ")
-	if userAPIKey != deepseekAPIKey {
+	if userAPIKey != activeConfig.apiKey {
 		log.Printf("Invalid API key provided")
 		http.Error(w, "Invalid API key", http.StatusUnauthorized)
 		return
@@ -456,8 +486,15 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	copyHeaders(proxyReq.Header, r.Header)
 
 	// Set DeepSeek API key and content type
-	proxyReq.Header.Set("Authorization", "Bearer "+deepseekAPIKey)
+	proxyReq.Header.Set("Authorization", "Bearer "+activeConfig.apiKey)
 	proxyReq.Header.Set("Content-Type", "application/json")
+
+	// Add OpenRouter-specific headers if using OpenRouter
+	if activeConfig.endpoint == openRouterEndpoint {
+		proxyReq.Header.Set("HTTP-Referer", "https://github.com/danilofalcao/cursor-deepseek")
+		proxyReq.Header.Set("X-Title", "Cursor DeepSeek")
+	}
+
 	if chatReq.Stream {
 		proxyReq.Header.Set("Accept", "text/event-stream")
 	}
