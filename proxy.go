@@ -322,10 +322,10 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Requested model: %s", chatReq.Model)
 
-	// Replace gpt-4o model with deepseek-chat
+	// Replace gpt-4o model with the appropriate deepseek model
 	if chatReq.Model == gpt4oModel {
-		chatReq.Model = deepseekChatModel
-		log.Printf("Model converted to: %s", deepseekChatModel)
+		chatReq.Model = activeConfig.model
+		log.Printf("Model converted to: %s", activeConfig.model)
 	} else {
 		log.Printf("Unsupported model requested: %s", chatReq.Model)
 		http.Error(w, fmt.Sprintf("Model %s not supported. Use %s instead.", chatReq.Model, gpt4oModel), http.StatusBadRequest)
@@ -334,7 +334,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Convert to DeepSeek request format
 	deepseekReq := DeepSeekRequest{
-		Model:    deepseekChatModel,
+		Model:    activeConfig.model,
 		Messages: convertMessages(chatReq.Messages),
 		Stream:   chatReq.Stream,
 	}
@@ -599,7 +599,7 @@ func handleRegularResponse(w http.ResponseWriter, resp *http.Response) {
 		ID:      deepseekResp.ID,
 		Object:  "chat.completion",
 		Created: deepseekResp.Created,
-		Model:   activeConfig.model,
+		Model:   gpt4oModel, // Always return gpt-4o as the model
 		Usage:   deepseekResp.Usage,
 	}
 
