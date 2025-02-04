@@ -16,11 +16,11 @@ import (
 )
 
 const (
-	ollamaEndpoint      = "http://localhost:11434/api"
-	defaultModel        = "llama2"
-	deepseekChatModel   = "michaelneale/deepseek-r1-goose"
-	deepseekCoderModel  = "deepseek-coder"
-	gpt4oModel          = "gpt-4o"
+	ollamaEndpoint     = "http://localhost:11434/api"
+	defaultModel       = "llama2"
+	deepseekChatModel  = "michaelneale/deepseek-r1-goose"
+	deepseekCoderModel = "deepseek-coder"
+	gpt4oModel         = "gpt-4o"
 )
 
 // Configuration structure
@@ -33,6 +33,7 @@ var activeConfig Config
 
 func init() {
 	// Load .env file
+	log.Printf("Variant: OLLAMA")
 	if err := godotenv.Load(); err != nil {
 		log.Printf("Warning: .env file not found or error loading it: %v", err)
 	}
@@ -45,14 +46,20 @@ func init() {
 		activeConfig.endpoint = ollamaEndpoint
 	}
 
-	// Parse command line arguments for model
-	modelFlag := defaultModel // default value
-	for i, arg := range os.Args {
-		if arg == "-model" && i+1 < len(os.Args) {
-			modelFlag = os.Args[i+1]
+	// Get custom Ollama endpoint if specified
+	modelenv := os.Getenv("DEFAULT_MODEL")
+	if modelenv != "" {
+		activeConfig.model = modelenv
+	} else {
+		//no environment set so check for command line argument
+		modelFlag := defaultModel // default value
+		for i, arg := range os.Args {
+			if arg == "-model" && i+1 < len(os.Args) {
+				modelFlag = os.Args[i+1]
+			}
 		}
+		activeConfig.model = modelFlag
 	}
-	activeConfig.model = modelFlag
 
 	log.Printf("Initialized with model: %s using endpoint: %s", activeConfig.model, activeConfig.endpoint)
 }
@@ -168,9 +175,13 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// If the model is not specified, use the default model
+	if chatReq.Model == "" {
+		chatReq.Model = activeConfig.model
+	}
 	// Convert to Ollama request format
 	ollamaReq := OllamaRequest{
-		Model:    activeConfig.model,
+		Model:    chatReq.Model,
 		Messages: chatReq.Messages,
 		Stream:   chatReq.Stream,
 	}
@@ -185,6 +196,8 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// Create Ollama request
 	ollamaReqBody, err := json.Marshal(ollamaReq)
 	if err != nil {
+		log.Printf("ERROR: failed to marshal ollama request: %s", err.Error())
+
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -196,6 +209,7 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		bytes.NewBuffer(ollamaReqBody),
 	)
 	if err != nil {
+		log.Printf("ERROR: POST failed: %s", err.Error())
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -325,4 +339,4 @@ type Model struct {
 	Object  string `json:"object"`
 	Created int64  `json:"created"`
 	OwnedBy string `json:"owned_by"`
-} 
+}

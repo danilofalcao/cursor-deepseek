@@ -22,6 +22,8 @@ COPY . .
 # Build the application based on the selected variant
 RUN if [ "$PROXY_VARIANT" = "openrouter" ]; then \
         CGO_ENABLED=0 GOOS=linux go build -o proxy proxy-openrouter.go; \
+    elif [ "$PROXY_VARIANT" = "ollama" ]; then \
+        CGO_ENABLED=0 GOOS=linux go build -o proxy proxy-ollama.go; \
     else \
         CGO_ENABLED=0 GOOS=linux go build -o proxy proxy.go; \
     fi
