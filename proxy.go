@@ -106,12 +106,25 @@ type ChatRequest struct {
 	MaxTokens   *int        `json:"max_tokens,omitempty"`
 }
 
+// Content can be either a string or an array of content blocks
+type Content interface{}
+
+// ContentBlock represents a content block in multimodal messages
+type ContentBlock struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL *struct {
+		URL    string `json:"url"`
+		Detail string `json:"detail,omitempty"`
+	} `json:"image_url,omitempty"`
+}
+
 type Message struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-	Name       string     `json:"name,omitempty"`
+	Role       string      `json:"role"`
+	Content    Content     `json:"content"`
+	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`
+	ToolCallID string      `json:"tool_call_id,omitempty"`
+	Name       string      `json:"name,omitempty"`
 }
 
 type Function struct {
@@ -163,6 +176,11 @@ func convertMessages(messages []Message) []Message {
 		log.Printf("Converting message %d - Role: %s", i, msg.Role)
 		converted[i] = msg
 
+		// Convert content to string format for DeepSeek API
+		if msg.Content != nil {
+			converted[i].Content = convertContentToString(msg.Content)
+		}
+
 		// Handle assistant messages with tool calls
 		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
 			log.Printf("Processing assistant message with %d tool calls", len(msg.ToolCalls))
@@ -189,13 +207,52 @@ func convertMessages(messages []Message) []Message {
 
 	// Log the final converted messages
 	for i, msg := range converted {
-		log.Printf("Final message %d - Role: %s, Content: %s", i, msg.Role, truncateString(msg.Content, 50))
+		contentStr := convertContentToString(msg.Content)
+		log.Printf("Final message %d - Role: %s, Content: %s", i, msg.Role, truncateString(contentStr, 50))
 		if len(msg.ToolCalls) > 0 {
 			log.Printf("Message %d has %d tool calls", i, len(msg.ToolCalls))
 		}
 	}
 
 	return converted
+}
+
+func convertContentToString(content Content) string {
+	if content == nil {
+		return ""
+	}
+
+	// If it's already a string, return it
+	if str, ok := content.(string); ok {
+		return str
+	}
+
+	// If it's an array of content blocks, convert to string
+	if contentBlocks, ok := content.([]interface{}); ok {
+		var result strings.Builder
+		for i, block := range contentBlocks {
+			if i > 0 {
+				result.WriteString("\n")
+			}
+
+			// Handle content block as map
+			if blockMap, ok := block.(map[string]interface{}); ok {
+				if blockType, exists := blockMap["type"]; exists && blockType == "text" {
+					if text, exists := blockMap["text"]; exists {
+						if textStr, ok := text.(string); ok {
+							result.WriteString(textStr)
+						}
+					}
+				}
+				// Note: Image content blocks are not supported by DeepSeek yet
+				// We could add handling here if needed in the future
+			}
+		}
+		return result.String()
+	}
+
+	// Fallback: convert to string representation
+	return fmt.Sprintf("%v", content)
 }
 
 func truncateString(s string, maxLen int) string {
@@ -608,13 +665,21 @@ func handleRegularResponse(w http.ResponseWriter, resp *http.Response, originalM
 	}, len(deepseekResp.Choices))
 
 	for i, choice := range deepseekResp.Choices {
+		// Convert DeepSeek message content to OpenAI format
+		message := choice.Message
+		if message.Content != nil {
+			// DeepSeek returns string content, but OpenAI API expects content in original format
+			// Since we don't have the original format, we'll keep it as string for now
+			// In a full implementation, we'd need to track the original content format
+		}
+
 		openAIResp.Choices[i] = struct {
 			Index        int     `json:"index"`
 			Message      Message `json:"message"`
 			FinishReason string  `json:"finish_reason"`
 		}{
 			Index:        choice.Index,
-			Message:      choice.Message,
+			Message:      message,
 			FinishReason: choice.FinishReason,
 		}
 
